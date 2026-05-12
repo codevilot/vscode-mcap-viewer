@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "lib": ["ES2022", "DOM"],
+    "rootDir": ".",
+    "outDir": "dist-types",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "moduleResolution": "node",
+    "jsx": "react-jsx"
+  },
+  "include": ["src/**/*.ts", "webview/**/*.ts"]
+}

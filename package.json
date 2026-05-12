@@ -1,0 +1,77 @@
+{
+  "name": "mcap-viewer",
+  "displayName": "MCAP Viewer",
+  "description": "Inspect MCAP camera streams and robot joint timelines directly inside VS Code.",
+  "version": "0.1.0",
+  "publisher": "codevilot",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/codevilot/vscode-mcap-viewer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/codevilot/vscode-mcap-viewer/issues"
+  },
+  "homepage": "https://github.com/codevilot/vscode-mcap-viewer#readme",
+  "keywords": [
+    "mcap",
+    "ros2",
+    "robotics",
+    "compressedimage",
+    "jointstate",
+    "trajectory",
+    "viewer",
+    "visualization"
+  ],
+  "engines": {
+    "vscode": "^1.118.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "mcapViewer.viewer",
+        "displayName": "MCAP Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.mcap"
+          }
+        ],
+        "priority": "default"
+      }
+    ]
+  },
+  "scripts": {
+    "postinstall": "node scripts/patch-mcap-core.js",
+    "generate:icon": "node scripts/generate-icon.js",
+    "compile": "npm run generate:icon && tsc --noEmit && node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "npm run generate:icon && tsc --noEmit && node esbuild.js --production",
+    "smoke": "node scripts/smoke.js",
+    "test:unit": "tsc --outDir dist-types --module commonjs --target es2022 src/series.ts src/series.test.ts && node --test dist-types/series.test.js",
+    "test": "npm run compile && npm run test:unit",
+    "package:vsix": "npm run package && npx @vscode/vsce package"
+  },
+  "dependencies": {
+    "@foxglove/cdr": "^3.5.0",
+    "@foxglove/rosmsg": "^5.0.5",
+    "@foxglove/rosmsg-serialization": "^2.1.0",
+    "@mcap/core": "^2.2.1",
+    "@mcap/nodejs": "^1.1.0",
+    "@mcap/support": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.x",
+    "@types/vscode": "^1.118.0",
+    "@vscode/vsce": "^3.9.1",
+    "esbuild": "^0.27.3",
+    "pngjs": "^7.0.0",
+    "typescript": "^5.9.3"
+  }
+}
