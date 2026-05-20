@@ -7,6 +7,7 @@ export interface CameraSummary {
 
 export interface InitMessage {
   type: "init";
+  phase: "preview" | "full";
   fileName: string;
   fileSize: number;
   totalSteps: number;
@@ -36,7 +37,7 @@ export interface StepMessage {
     matchedTimestampNs: string;
     frameIndex: number;
     deltaMs: number;
-    dataUrl?: string;
+    jpeg?: Uint8Array;
     format?: string;
     frameId?: string;
     error?: string;

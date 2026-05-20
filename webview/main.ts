@@ -48,7 +48,23 @@ if (!app) {
 window.addEventListener("message", (event: MessageEvent<HostToWebview>) => {
   const msg = event.data;
   if (msg.type === "init") {
+    // Two-phase loading: the first init is a "preview" with cameras-only
+    // timeline so the UI can render fast even on NAS. The second init replaces
+    // it with the joint-based timeline once the host finishes the background
+    // scan. Re-anchor the current step by timestamp so the playhead doesn't
+    // jump when the timeline lengths differ.
+    const prevTs = state.step?.timestampNs;
+    const wasPlaying = state.playing;
     state.init = msg;
+    if (msg.phase === "full" && prevTs && msg.timestampsNs.length > 0) {
+      const targetIdx = findStepAt(safeBigInt(prevTs));
+      state.lastRequestedStep = targetIdx;
+      requestStep(targetIdx);
+      if (wasPlaying) {
+        state.anchorWallMs = performance.now();
+        state.anchorTsNs = safeBigInt(msg.timestampsNs[targetIdx] ?? "0");
+      }
+    }
     requestRender();
   } else if (msg.type === "step") {
     if (!state.playing && msg.stepIndex !== state.lastRequestedStep) {
@@ -58,6 +74,30 @@ window.addEventListener("message", (event: MessageEvent<HostToWebview>) => {
     requestStepUpdate();
   }
 });
+
+function safeBigInt(value: string): bigint {
+  try { return BigInt(value); } catch { return 0n; }
+}
+
+// Each camera topic keeps a single live Blob URL; when a new frame arrives we
+// allocate the next URL and revoke the previous one so the browser can release
+// the JPEG bytes immediately instead of leaking memory across hours of playback.
+const frameUrls = new Map<string, string>();
+function urlForFrame(topic: string, jpeg: Uint8Array | undefined): string | undefined {
+  const prev = frameUrls.get(topic);
+  if (!jpeg) {
+    if (prev) {
+      URL.revokeObjectURL(prev);
+      frameUrls.delete(topic);
+    }
+    return undefined;
+  }
+  const blob = new Blob([jpeg as BlobPart], { type: "image/jpeg" });
+  const url = URL.createObjectURL(blob);
+  frameUrls.set(topic, url);
+  if (prev) URL.revokeObjectURL(prev);
+  return url;
+}
 
 let renderPending = false;
 let fullRenderNeeded = false;
@@ -118,13 +158,14 @@ function updateStep(): void {
       }
       if (delta) delta.textContent = `${payload.deltaMs.toFixed(1)} ms`;
       if (frame) {
-        if (payload.dataUrl) {
+        const url = urlForFrame(payload.topic, payload.jpeg);
+        if (url) {
           let img = frame.querySelector("img.camera-img") as HTMLImageElement | null;
           if (!img) {
-            frame.innerHTML = `<img class="camera-img" data-topic="${escapeHtmlAttr(payload.topic)}" src="${payload.dataUrl}" alt="${escapeHtml(payload.topic)}" />`;
-          } else if (img.src !== payload.dataUrl) {
-            img.src = payload.dataUrl;
+            frame.innerHTML = `<img class="camera-img" data-topic="${escapeHtmlAttr(payload.topic)}" alt="${escapeHtml(payload.topic)}" />`;
+            img = frame.querySelector("img.camera-img") as HTMLImageElement | null;
           }
+          if (img) img.src = url;
         } else {
           const msg = payload.error ?? "Frame loading…";
           let empty = frame.querySelector(".camera-empty") as HTMLElement | null;
@@ -363,8 +404,9 @@ function render(): void {
   const hiddenCameras = init.cameras.filter((camera) => state.hiddenTopics.has(camera.topic));
   const cameraCards = visibleCameras.map((camera) => {
     const payload = step?.cameras.find((entry) => entry.topic === camera.topic);
-    const body = payload?.dataUrl
-      ? `<img class="camera-img" data-topic="${escapeHtmlAttr(camera.topic)}" src="${payload.dataUrl}" alt="${escapeHtml(camera.topic)}" />`
+    const url = urlForFrame(camera.topic, payload?.jpeg);
+    const body = url
+      ? `<img class="camera-img" data-topic="${escapeHtmlAttr(camera.topic)}" src="${url}" alt="${escapeHtml(camera.topic)}" />`
       : `<div class="camera-empty" data-topic="${escapeHtmlAttr(camera.topic)}">${escapeHtml(payload?.error ?? "Frame loading…")}</div>`;
     return `
       <article class="camera-card" data-topic="${escapeHtmlAttr(camera.topic)}">
