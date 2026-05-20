@@ -180,31 +180,48 @@ function updateStep(): void {
   }
 
   // Joint values + sparkline cursor lines
-  updateJoints("state", step?.state, currentStep, init.stateSeries.length || 1);
-  updateJoints("action", step?.action, currentStep, init.actionSeries.length || 1);
+  const cursorTsNs = safeBigInt(currentTs);
+  updateJoints("state", step?.state, cursorTsNs);
+  updateJoints("action", step?.action, cursorTsNs);
 }
 
-function updateJoints(kind: "state" | "action", values: number[] | undefined, cursorStep: number, _total: number): void {
+function updateJoints(kind: "state" | "action", values: number[] | undefined, cursorTsNs: bigint): void {
   const valueEls = document.querySelectorAll<HTMLElement>(`[data-value-kind="${kind}"]`);
   valueEls.forEach((el) => {
     const idx = Number(el.dataset.valueIndex);
     const v = values?.[idx];
     el.textContent = formatNumber(v);
   });
-  // Sparkline cursor: each joint-row's <line class="cursor"> moves to current step.
+  // Sparkline cursor: each joint-row's <line class="cursor"> moves to the
+  // current step's wall-clock timestamp, normalized against the shared
+  // (state ∪ action) range encoded in the SVG's data-axis-* attributes.
   const rows = document.querySelectorAll<HTMLElement>(`[data-joint-kind="${kind}"]`);
   const W = 320;
   rows.forEach((row) => {
     const spark = row.querySelector<SVGElement>("svg.spark");
     if (!spark) return;
-    const len = Number(spark.getAttribute("data-spark-len") ?? 1);
-    const x = len <= 1 ? 0 : (cursorStep / Math.max(1, len - 1)) * W;
+    const startAttr = spark.getAttribute("data-axis-start");
+    const endAttr = spark.getAttribute("data-axis-end");
+    if (!startAttr || !endAttr) return;
+    const axisStart = safeBigInt(startAttr);
+    const axisEnd = safeBigInt(endAttr);
+    const x = cursorXForTimestamp(cursorTsNs, axisStart, axisEnd, W);
     const cursor = spark.querySelector<SVGLineElement>("line.cursor");
     if (cursor) {
       cursor.setAttribute("x1", x.toFixed(2));
       cursor.setAttribute("x2", x.toFixed(2));
     }
   });
+}
+
+function cursorXForTimestamp(ts: bigint, axisStart: bigint, axisEnd: bigint, width: number): number {
+  const span = axisEnd - axisStart;
+  if (span <= 0n) return 0;
+  if (ts <= axisStart) return 0;
+  if (ts >= axisEnd) return width;
+  // Use floating-point math for the ratio; nanosecond ranges fit comfortably
+  // in a double (up to ~9e15 ≈ 104 days at ns precision).
+  return (Number(ts - axisStart) / Number(span)) * width;
 }
 
 // Event delegation: we listen on "mousedown" instead of "click" because during
@@ -376,6 +393,8 @@ function render(): void {
   const step = state.step;
   const currentStep = step?.stepIndex ?? 0;
   const currentTs = step?.timestampNs ?? init.timestampsNs[0] ?? "0";
+  const cursorTsNs = safeBigInt(currentTs);
+  const axis = computeSparklineAxis(init);
   const dims = Math.max(init.stateNames.length, init.actionNames.length);
   const jointRows = dims === 0
     ? `<div class="empty">No joint timeline found.</div>`
@@ -391,8 +410,8 @@ function render(): void {
           const stateSeries = init.stateSeries.map((sample) => sample[index] ?? Number.NaN);
           const actionSeries = init.actionSeries.map((sample) => sample[index] ?? Number.NaN);
           return `
-            ${renderSignalCard(stateName, stateSeries, step?.state?.[index], currentStep, false, index)}
-            ${renderSignalCard(actionName, actionSeries, step?.action?.[index], currentStep, true, index)}
+            ${renderSignalCard(stateName, stateSeries, init.stateTimestampsNs, step?.state?.[index], cursorTsNs, axis, false, index)}
+            ${renderSignalCard(actionName, actionSeries, init.actionTimestampsNs, step?.action?.[index], cursorTsNs, axis, true, index)}
           `;
         }).join("")}
       </div>
@@ -609,11 +628,40 @@ function findStepAt(targetNs: bigint): number {
   return lo;
 }
 
+interface SparklineAxis {
+  startNs: bigint;
+  endNs: bigint;
+}
+
+function computeSparklineAxis(init: InitMessage): SparklineAxis {
+  // Prefer the host-computed union range (state ∪ action). Fall back to the
+  // first/last timestamps we actually have so degenerate or single-series
+  // recordings still render.
+  const candidates: bigint[] = [];
+  if (init.seriesStartNs) candidates.push(safeBigInt(init.seriesStartNs));
+  if (init.seriesEndNs) candidates.push(safeBigInt(init.seriesEndNs));
+  for (const ts of init.stateTimestampsNs) candidates.push(safeBigInt(ts));
+  for (const ts of init.actionTimestampsNs) candidates.push(safeBigInt(ts));
+  if (candidates.length === 0) {
+    return { startNs: 0n, endNs: 1n };
+  }
+  let startNs = candidates[0];
+  let endNs = candidates[0];
+  for (const ts of candidates) {
+    if (ts < startNs) startNs = ts;
+    if (ts > endNs) endNs = ts;
+  }
+  if (endNs <= startNs) endNs = startNs + 1n;
+  return { startNs, endNs };
+}
+
 function renderSignalCard(
   name: string | undefined,
   series: number[],
+  timestampsNs: string[],
   value: number | undefined,
-  cursor: number,
+  cursorTsNs: bigint,
+  axis: SparklineAxis,
   isAction: boolean,
   jointIndex: number,
 ): string {
@@ -627,47 +675,58 @@ function renderSignalCard(
         <span class="joint-name ${isAction ? "action" : ""}">${escapeHtml(name)}</span>
         <span class="joint-value" data-value-kind="${kind}" data-value-index="${jointIndex}">${formatNumber(value)}</span>
       </div>
-      ${renderSparkline(series, cursor, isAction)}
+      ${renderSparkline(series, timestampsNs, cursorTsNs, axis, isAction)}
     </div>
   `;
 }
 
-function renderSparkline(series: number[], cursor: number, isAction: boolean): string {
+function renderSparkline(
+  series: number[],
+  timestampsNs: string[],
+  cursorTsNs: bigint,
+  axis: SparklineAxis,
+  isAction: boolean,
+): string {
   const width = 320;
   const height = 42;
   const filtered = series.filter((value) => Number.isFinite(value));
-  if (filtered.length === 0) {
-    return `<svg class="spark" viewBox="0 0 ${width} ${height}"></svg>`;
+  if (filtered.length === 0 || timestampsNs.length === 0) {
+    return `<svg class="spark" viewBox="0 0 ${width} ${height}" data-axis-start="${axis.startNs.toString()}" data-axis-end="${axis.endNs.toString()}"></svg>`;
   }
   const min = Math.min(...filtered);
   const max = Math.max(...filtered);
   const span = max - min || 1;
-  const sampled = downsample(series, 180);
-  const points = sampled.map((value, index) => {
-    const x = sampled.length <= 1 ? 0 : (index / (sampled.length - 1)) * width;
+  const sampled = downsamplePairs(series, timestampsNs, 180);
+  const axisSpan = Number(axis.endNs - axis.startNs) || 1;
+  const points = sampled.map(([value, tsNs]) => {
+    const x = (Number(tsNs - axis.startNs) / axisSpan) * width;
     const safe = Number.isFinite(value) ? value : min;
     const y = height - ((safe - min) / span) * (height - 4) - 2;
     return `${x.toFixed(2)},${y.toFixed(2)}`;
   }).join(" ");
-  const cursorX = series.length <= 1 ? 0 : (cursor / Math.max(1, series.length - 1)) * width;
+  const cursorX = cursorXForTimestamp(cursorTsNs, axis.startNs, axis.endNs, width);
   return `
-    <svg class="spark" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" data-spark-len="${series.length}">
+    <svg class="spark" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" data-axis-start="${axis.startNs.toString()}" data-axis-end="${axis.endNs.toString()}">
       <polyline class="line ${isAction ? "action" : ""}" points="${points}" />
       <line class="cursor" x1="${cursorX.toFixed(2)}" y1="0" x2="${cursorX.toFixed(2)}" y2="${height}" />
     </svg>
   `;
 }
 
-function downsample(series: number[], maxPoints: number): number[] {
-  if (series.length <= maxPoints) {
-    return series;
+function downsamplePairs(values: number[], timestampsNs: string[], maxPoints: number): Array<[number, bigint]> {
+  const n = Math.min(values.length, timestampsNs.length);
+  if (n === 0) return [];
+  if (n <= maxPoints) {
+    const out: Array<[number, bigint]> = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = [values[i] ?? Number.NaN, safeBigInt(timestampsNs[i])];
+    return out;
   }
-  const output: number[] = [];
+  const out: Array<[number, bigint]> = new Array(maxPoints);
   for (let index = 0; index < maxPoints; index++) {
-    const at = Math.round((index / (maxPoints - 1)) * (series.length - 1));
-    output.push(series[at] ?? Number.NaN);
+    const at = Math.round((index / (maxPoints - 1)) * (n - 1));
+    out[index] = [values[at] ?? Number.NaN, safeBigInt(timestampsNs[at])];
   }
-  return output;
+  return out;
 }
 
 function formatTimestamp(timestampNs: string): string {
