@@ -102,33 +102,50 @@ export class McapSession implements vscode.Disposable {
     const { effectivePath, localCachePath } = await stageForRead(sourcePath);
     const swapReader = localCachePath != undefined && effectivePath !== sourcePath;
 
-    let newFileHandle: FileHandle | undefined;
-    let activeReader: McapIndexedReader = this.reader;
-    if (swapReader) {
-      newFileHandle = await open(effectivePath, "r");
-      try {
-        activeReader = await McapIndexedReader.Initialize({
-          readable: new FileHandleReadable(newFileHandle),
-          decompressHandlers: await loadDecompressHandlers(),
-          messageIndexCacheSizeBytes: MESSAGE_INDEX_CACHE_BYTES,
-        });
-      } catch (error) {
-        await newFileHandle.close().catch(() => undefined);
+    // Always open a dedicated FileHandle/reader for enrichment so its
+    // readMessages iteration doesn't share chunk-view cache state with the
+    // active reader used for camera frame fetches. Sharing the active reader
+    // here lets the background scan and concurrent loadCameraFrame() calls
+    // corrupt each other's chunk-view cache, which can stall both for a long
+    // time on non-trivial files.
+    const enrichFileHandle = await open(effectivePath, "r");
+    let enrichReader: McapIndexedReader;
+    try {
+      enrichReader = await McapIndexedReader.Initialize({
+        readable: new FileHandleReadable(enrichFileHandle),
+        decompressHandlers: await loadDecompressHandlers(),
+        messageIndexCacheSizeBytes: MESSAGE_INDEX_CACHE_BYTES,
+      });
+    } catch (error) {
+      await enrichFileHandle.close().catch(() => undefined);
+      if (swapReader && localCachePath) {
         await unlink(localCachePath).catch(() => undefined);
-        throw error;
       }
+      throw error;
     }
 
-    const enrichedSummary = await analyzeJointTimeline(activeReader, this.currentSummary);
+    let enrichedSummary: McapSummary;
+    try {
+      enrichedSummary = await analyzeJointTimeline(enrichReader, this.currentSummary);
+    } catch (error) {
+      await enrichFileHandle.close().catch(() => undefined);
+      if (swapReader && localCachePath) {
+        await unlink(localCachePath).catch(() => undefined);
+      }
+      throw error;
+    }
 
     // Swap inside the serialized queue so no concurrent read sees a half-
     // updated session (reader/fileHandle/summary all move together).
     await this.serializeRead(async () => {
       const oldFileHandle = this.fileHandle;
       const oldLocalCache = this.localCachePath;
-      if (swapReader && newFileHandle) {
-        this.fileHandle = newFileHandle;
-        this.reader = activeReader;
+      if (swapReader) {
+        // Promote the enrichment reader/fileHandle to be the active one so
+        // future frame fetches use the local cache copy instead of the
+        // network mount.
+        this.fileHandle = enrichFileHandle;
+        this.reader = enrichReader;
         this.localCachePath = localCachePath;
       }
       this.currentSummary = enrichedSummary;
@@ -140,6 +157,13 @@ export class McapSession implements vscode.Disposable {
         }
         if (oldLocalCache) {
           await unlink(oldLocalCache).catch(() => undefined);
+        }
+      } else {
+        // Active reader stays as-is; drop the dedicated enrichment handle.
+        try {
+          await enrichFileHandle.close();
+        } catch (error) {
+          console.warn(`[mcap-viewer] failed to close enrichment fileHandle: ${error}`);
         }
       }
     });

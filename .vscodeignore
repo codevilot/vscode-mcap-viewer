@@ -9,7 +9,6 @@ tsconfig.json
 *.tsbuildinfo
 coverage/**
 node_modules/@types/**
-node_modules/**/src/**
 node_modules/**/*.d.ts
 node_modules/**/*.map
 node_modules/**/*.md
