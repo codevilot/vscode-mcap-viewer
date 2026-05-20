@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+- Align OBSERVATION.STATE and ACTION sparklines on a shared wall-clock axis. State and action series were previously stretched independently to fill the sparkline width by array index, so columns with different sampling rates or start/end times rendered the same X at different real-world moments. Per-sample timestamps now flow through the protocol and each sample (and the cursor) is placed by `(sampleTs - axisStart) / axisSpan` against the union of state ∪ action ranges, so identical wall-clock instants line up across both columns.
+
 ## 0.1.2
 
 - Fix packaged extension failing to activate: `.vscodeignore`'s `node_modules/**/src/**` rule was stripping files some bundled packages declare as their CJS main entry (`@foxglove/crc/dist/cjs/src/index.js`, `protobufjs/src/index.js`, ...). Activation threw before the custom editor could register, leaving the webview stuck on "Loading…". Removed the over-broad rule; `package:vsix` now also runs `scripts/verify-vsix.js` which requires the packaged extension main in a child node process so the same class of `.vscodeignore` mistake fails the build.
