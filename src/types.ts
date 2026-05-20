@@ -31,10 +31,18 @@ export interface McapSummary {
   actionNames: string[];
   stateSeries: number[][];
   actionSeries: number[][];
+  stateTimestampsNs: bigint[];
+  actionTimestampsNs: bigint[];
   timelineSource: "state" | "action" | "camera" | "none";
   startedAtNs?: bigint;
   endedAtNs?: bigint;
   durationNs?: bigint;
+  // Wall-clock range covering both state and action series — used to align the
+  // two sparkline columns on a shared time axis. May extend beyond
+  // startedAtNs/endedAtNs (which track the master timeline) when one series
+  // outlives the other.
+  seriesStartNs?: bigint;
+  seriesEndNs?: bigint;
   notes: string[];
 }
 

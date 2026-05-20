@@ -17,10 +17,14 @@ export interface InitMessage {
   actionNames: string[];
   stateSeries: number[][];
   actionSeries: number[][];
+  stateTimestampsNs: string[];
+  actionTimestampsNs: string[];
   timelineSource: "state" | "action" | "camera" | "none";
   startedAtNs?: string;
   endedAtNs?: string;
   durationNs?: string;
+  seriesStartNs?: string;
+  seriesEndNs?: string;
   timestampsNs: string[];
   cameras: CameraSummary[];
   notes: string[];

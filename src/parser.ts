@@ -339,10 +339,14 @@ async function analyzePreview(
     actionNames: [],
     stateSeries: [],
     actionSeries: [],
+    stateTimestampsNs: [],
+    actionTimestampsNs: [],
     timelineSource: cameras[0] ? "camera" : "none",
     startedAtNs,
     endedAtNs,
     durationNs: startedAtNs != undefined && endedAtNs != undefined ? endedAtNs - startedAtNs : undefined,
+    seriesStartNs: undefined,
+    seriesEndNs: undefined,
     notes,
   };
 }
@@ -420,6 +424,18 @@ async function analyzeJointTimeline(
   const startedAtNs = timeline[0]?.timestampNs;
   const endedAtNs = timeline[timeline.length - 1]?.timestampNs;
 
+  // Union of state and action timestamp ranges so the sparkline column can
+  // share an X axis even when one series starts/ends at a different
+  // wall-clock time than the other.
+  const seriesEndpoints = [
+    stateSeries?.timestampsNs[0],
+    stateSeries?.timestampsNs[stateSeries.timestampsNs.length - 1],
+    actionSeries?.timestampsNs[0],
+    actionSeries?.timestampsNs[actionSeries.timestampsNs.length - 1],
+  ].filter((ts): ts is bigint => ts != undefined);
+  const seriesStartNs = seriesEndpoints.length > 0 ? seriesEndpoints.reduce((a, b) => (a < b ? a : b)) : undefined;
+  const seriesEndNs = seriesEndpoints.length > 0 ? seriesEndpoints.reduce((a, b) => (a > b ? a : b)) : undefined;
+
   return {
     ...preview,
     timeline,
@@ -429,10 +445,14 @@ async function analyzeJointTimeline(
     actionNames: actionSeries?.names ?? [],
     stateSeries: stateSeries?.positions ?? [],
     actionSeries: actionSeries?.positions ?? [],
+    stateTimestampsNs: stateSeries?.timestampsNs ?? [],
+    actionTimestampsNs: actionSeries?.timestampsNs ?? [],
     timelineSource,
     startedAtNs,
     endedAtNs,
     durationNs: startedAtNs != undefined && endedAtNs != undefined ? endedAtNs - startedAtNs : undefined,
+    seriesStartNs,
+    seriesEndNs,
     notes,
   };
 }
