@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { renderWebviewHtml } from "./html";
 import { McapSession } from "./parser";
-import { HostToWebview, WebviewToHost } from "./protocol";
+import { HostToWebview, InitMessage, WebviewToHost } from "./protocol";
 
 export class McapViewerProvider implements vscode.CustomReadonlyEditorProvider<McapDocument> {
   static readonly viewType = "mcapViewer.viewer";
@@ -9,7 +9,7 @@ export class McapViewerProvider implements vscode.CustomReadonlyEditorProvider<M
   constructor(private readonly extensionUri: vscode.Uri) {}
 
   async openCustomDocument(uri: vscode.Uri): Promise<McapDocument> {
-    const session = await McapSession.open(uri);
+    const session = await McapSession.openPreview(uri);
     return new McapDocument(session);
   }
 
@@ -19,25 +19,49 @@ export class McapViewerProvider implements vscode.CustomReadonlyEditorProvider<M
       localResourceRoots: [this.extensionUri],
     };
     panel.webview.html = renderWebviewHtml(panel.webview, this.extensionUri);
+
+    let alive = true;
+    panel.onDidDispose(() => {
+      alive = false;
+    });
+
+    const post = (message: HostToWebview): void => {
+      if (!alive) return;
+      panel.webview.postMessage(message);
+    };
+
     panel.webview.onDidReceiveMessage(async (message: WebviewToHost) => {
       switch (message.type) {
         case "ready":
-          panel.webview.postMessage(this.buildInit(document));
+          post(this.buildInit(document, "preview"));
           if (document.session.summary.timeline.length > 0) {
-            panel.webview.postMessage(await this.buildStep(document, 0));
+            post(await this.buildStep(document, 0));
           }
+          void document.session
+            .enrichTimeline()
+            .then(async () => {
+              if (!alive) return;
+              post(this.buildInit(document, "full"));
+              if (document.session.summary.timeline.length > 0) {
+                post(await this.buildStep(document, 0));
+              }
+            })
+            .catch((error) => {
+              console.warn(`[mcap-viewer] enrichment failed: ${error}`);
+            });
           return;
         case "requestStep":
-          panel.webview.postMessage(await this.buildStep(document, message.stepIndex));
+          post(await this.buildStep(document, message.stepIndex));
           return;
       }
     });
   }
 
-  private buildInit(document: McapDocument): HostToWebview {
+  private buildInit(document: McapDocument, phase: "preview" | "full"): InitMessage {
     const { summary } = document.session;
     return {
       type: "init",
+      phase,
       fileName: summary.fileName,
       fileSize: summary.fileSize,
       totalSteps: summary.timeline.length,

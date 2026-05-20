@@ -43,7 +43,7 @@ export interface CameraFramePayload {
   matchedTimestampNs: string;
   frameIndex: number;
   deltaMs: number;
-  dataUrl?: string;
+  jpeg?: Uint8Array;
   format?: string;
   frameId?: string;
   error?: string;

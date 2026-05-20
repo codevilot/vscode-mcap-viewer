@@ -6,7 +6,7 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
   const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "dist", "webview.js"));
   const csp = [
     "default-src 'none'",
-    `img-src ${webview.cspSource} data:`,
+    `img-src ${webview.cspSource} data: blob:`,
     `style-src ${webview.cspSource} 'unsafe-inline'`,
     `script-src 'nonce-${nonce}'`,
   ].join("; ");
